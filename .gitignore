@@ -6,3 +6,5 @@
 .vs/ColorBlindSimplification/v17/Browse.VC.db-wal
 .vs/ColorBlindSimplification/v17/Browse.VC.opendb
 .vs/*
+ColorBlindSimplification/x64/*
+ColorBlindSimplification/.vs/*
