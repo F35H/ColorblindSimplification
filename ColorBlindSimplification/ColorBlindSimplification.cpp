@@ -49,6 +49,9 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
   elapsedTime = 0.0;
   startTime = frameTimer.now();
 
+  dxSyncObjects->TriggerSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
+  dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
+
   MSG msg = {};
   for (;msg.message != WM_QUIT;) {
     if (::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
@@ -58,8 +61,8 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
   }; //forloop
 
   for (;i<dxSyncObjects->fences.size();++i) {
-    dxSyncObjects->TriggerSemaphore(i,dxCmdChain->cmdQueue);
-    dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueue);
+    dxSyncObjects->TriggerSemaphore(i,dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
+    dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
     ::CloseHandle(dxSyncObjects->fenceEvents[i]);
   }; //fori>=0
 }; //wWinMain
@@ -83,6 +86,27 @@ inline void RenderLoop() {
     elapsedTime = 0.0;
   }; //if elapsedTime
 
+  
+  // Update the model matrix.
+  float angle = static_cast<float>(elapsedTime * 90.0);
+  const XMVECTOR rotationAxis = XMVectorSet(0, 1, 1, 0);
+  m_ModelMatrix = XMMatrixRotationAxis(rotationAxis, XMConvertToRadians(angle));
+
+  // Update the view matrix.
+  const XMVECTOR eyePosition = XMVectorSet(0, 0, -10, 1);
+  const XMVECTOR focusPoint = XMVectorSet(0, 0, 0, 1);
+  const XMVECTOR upDirection = XMVectorSet(0, 1, 0, 0);
+  m_ViewMatrix = XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+
+  // Update the projection matrix.
+  float aspectRatio = GetClientWidth() / static_cast<float>(GetClientHeight());
+  m_ProjectionMatrix = XMMatrixPerspectiveFovLH(XMConvertToRadians(m_FoV), aspectRatio, 0.1f, 100.0f);
+
+
+
+
+
+  //Render
   auto& cmdAlloc = dxCmdChain->cmdAllocs[dxSwapChain->backBufferIndex];
   cmdAlloc->Reset();
   dxCmdChain->cmdList->Reset(cmdAlloc.Get(), nullptr);
@@ -145,33 +169,24 @@ inline void ResizeWindow() {
     dxWindow->windowX = std::max(1, crntWidth);
     dxWindow->windowY = std::max(1, crntHeight);
 
+    dxSwapChain->viewPort = 
+      CD3DX12_VIEWPORT(
+        0.0f, 0.0f, 
+        dxWindow->windowX, 
+        dxWindow->windowY);
+
     size_t i = 0;
     for (; i < DXConfig::numFrames; ++i) {
       if (i == 0) {
-        dxSyncObjects->TriggerSemaphore(i, dxCmdChain->cmdQueue);
-        dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueue);
+        dxSyncObjects->TriggerSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
+        dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
       }; //if i==0 
-      
-      dxSwapChain->backBuffers[i].Reset();
     }; //forloop
 
-    DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
+    dxUniform->indiceBuffers[2].FillBuffer(dxCmdChain->cmdList, dxHardware->device, dxWindow->windowX, dxWindow->windowY);
 
-    ErrorHandler::ConfirmSuccess(
-      dxSwapChain->swapChain->GetDesc(&swapChainDesc),
-      "Transfering Descriptor Data");
-
-    ErrorHandler::ConfirmSuccess(
-      dxSwapChain->swapChain->ResizeBuffers(
-        DXConfig::numFrames, 
-        dxWindow->windowX,
-        dxWindow->windowY,
-        swapChainDesc.BufferDesc.Format,
-        swapChainDesc.Flags),
-      "Resizing SwapChain Buffer");
-
-    dxSwapChain->backBufferIndex = dxSwapChain->swapChain->GetCurrentBackBufferIndex();
-    dxSwapChain->RefreshData(dxHardware->device, dxUniform);
+    dxHardware->device->CreateDepthStencilView(dxUniform->indiceBuffers[2].buffer.Get(), dxUniform->indiceBuffers[2].bufferInfo,
+      dxUniform->descHeaps[D3D12_DESCRIPTOR_HEAP_TYPE_DSV].descHeap->GetCPUDescriptorHandleForHeapStart());
   }; //if width/height
 
 }; //ResizeWindow
