@@ -11,6 +11,7 @@ int DXConfig::screenTear = 0;
 const std::array<const float,4> DXConfig::bckgndcolor = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow) {
+  using namespace DXGame;
   using namespace DXCommon;
 
   size_t i = 0;
@@ -68,6 +69,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
 }; //wWinMain
 
 inline void RenderLoop() {
+  using namespace DXGame;
   using namespace DXCommon;
 
   //Manage Time
@@ -86,33 +88,22 @@ inline void RenderLoop() {
     elapsedTime = 0.0;
   }; //if elapsedTime
 
-  
-  // Update the model matrix.
+
+  //Set Matrices
   float angle = static_cast<float>(elapsedTime * 90.0);
   const XMVECTOR rotationAxis = XMVectorSet(0, 1, 1, 0);
-  m_ModelMatrix = XMMatrixRotationAxis(rotationAxis, XMConvertToRadians(angle));
+  modelMat = XMMatrixRotationAxis(rotationAxis, XMConvertToRadians(angle));
 
-  // Update the view matrix.
   const XMVECTOR eyePosition = XMVectorSet(0, 0, -10, 1);
   const XMVECTOR focusPoint = XMVectorSet(0, 0, 0, 1);
   const XMVECTOR upDirection = XMVectorSet(0, 1, 0, 0);
-  m_ViewMatrix = XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+  viewMat = XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
 
-  // Update the projection matrix.
-  float aspectRatio = GetClientWidth() / static_cast<float>(GetClientHeight());
-  m_ProjectionMatrix = XMMatrixPerspectiveFovLH(XMConvertToRadians(m_FoV), aspectRatio, 0.1f, 100.0f);
+  float aspectRatio = dxWindow->windowX / dxWindow->windowY;
+  projMat = XMMatrixPerspectiveFovLH(XMConvertToRadians(DXConfig::FOV), aspectRatio, 0.1f, 100.0f);
 
-
-
-
-
-  //Render
-  auto& cmdAlloc = dxCmdChain->cmdAllocs[dxSwapChain->backBufferIndex];
-  cmdAlloc->Reset();
-  dxCmdChain->cmdList->Reset(cmdAlloc.Get(), nullptr);
-
-
-  //Clear Screen
+  
+  //Begin Render
   dxSyncObjects->barriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
     dxSwapChain->backBuffers[dxSwapChain->backBufferIndex].Get(),
     D3D12_RESOURCE_STATE_PRESENT, 
@@ -120,15 +111,42 @@ inline void RenderLoop() {
   ); //ClrScrn
   
   dxCmdChain->cmdList->ResourceBarrier(1, &dxSyncObjects->barriers[0]);
+  dxCmdChain->cmdList->ClearRenderTargetView(
+    dxUniform->descHeaps[D3D12_DESCRIPTOR_HEAP_TYPE_RTV].GetCPUHandle(dxHardware->device),
+    DXConfig::bckgndcolor.data(),
+    0,
+    nullptr);
 
-  CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(
-    dxUniform->uniformDesc->GetCPUDescriptorHandleForHeapStart(),
-    dxSwapChain->backBufferIndex, 
-    dxUniform->uniformDescSize
-  ); //DescHandle
-  dxCmdChain->cmdList->ClearRenderTargetView(rtv,DXConfig::bckgndcolor.data(), 0, nullptr);
+  dxCmdChain->cmdList->ClearDepthStencilView(
+    dxUniform->descHeaps[D3D12_DESCRIPTOR_HEAP_TYPE_DSV].GetCPUHandle(dxHardware->device), 
+    D3D12_CLEAR_FLAG_DEPTH, 
+    0, 0, 0, nullptr);
 
-  //Present Screen
+  dxCmdChain->cmdList->SetPipelineState(dxUniform->pipelineVector[0].state.Get());
+  dxCmdChain->cmdList->SetGraphicsRootSignature(dxUniform->pipelineVector[0].rootSignature.Get());
+
+  dxCmdChain->cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  dxCmdChain->cmdList->IASetVertexBuffers(0, 1, dxUniform->verticeBuffers[0].bufferInfo);
+  dxCmdChain->cmdList->IASetIndexBuffer(dxUniform->indiceBuffers[0].bufferInfo);
+
+  dxCmdChain->cmdList->RSSetViewports(1, &dxSwapChain->viewPort);
+  dxCmdChain->cmdList->RSSetScissorRects(1, &dxSwapChain->scissorRect);
+
+  dxCmdChain->cmdList->OMSetRenderTargets(
+    1, 
+    &dxUniform->descHeaps[D3D12_DESCRIPTOR_HEAP_TYPE_RTV].GetCPUHandle(dxHardware->device),
+    FALSE, 
+    &dxUniform->descHeaps[D3D12_DESCRIPTOR_HEAP_TYPE_DSV].GetCPUHandle(dxHardware->device));
+
+
+  XMMATRIX mvpMatrix = XMMatrixMultiply(modelMat, viewMat);
+  mvpMatrix = XMMatrixMultiply(mvpMatrix, projMat);
+  dxCmdChain->cmdList->SetGraphicsRoot32BitConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix, 0);
+
+  dxCmdChain->cmdList->DrawIndexedInstanced(_countof(g_Indicies), 1, 0, 0, 0);
+
+
+  //Present Screen 
   dxSyncObjects->barriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(
     dxSwapChain->backBuffers[dxSwapChain->backBufferIndex].Get(),
     D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -142,10 +160,10 @@ inline void RenderLoop() {
       dxCmdChain->cmdList.Get()
   }; //commandLists
 
-  dxCmdChain->cmdQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
-  dxSyncObjects->TriggerSemaphore(dxSwapChain->backBufferIndex, dxCmdChain->cmdQueue);
+  dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]->ExecuteCommandLists(_countof(commandLists), commandLists);
+  dxSyncObjects->TriggerSemaphore(dxSwapChain->backBufferIndex, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
 
-  auto presentFlags = DXConfig::screenTear && !DXConfig::VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+  auto presentFlags = screenTear && !DXConfig::VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
 
   ErrorHandler::ConfirmSuccess(
     dxSwapChain->swapChain->Present(DXConfig::VSync, presentFlags),
@@ -153,7 +171,7 @@ inline void RenderLoop() {
 
   dxSwapChain->backBufferIndex = dxSwapChain->swapChain->GetCurrentBackBufferIndex();
 
-  dxSyncObjects->ReturnSemaphore(dxSwapChain->backBufferIndex, dxCmdChain->cmdQueue);
+  dxSyncObjects->ReturnSemaphore(dxSwapChain->backBufferIndex, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
 }; //RenderLoop
 
 inline void ResizeWindow() {

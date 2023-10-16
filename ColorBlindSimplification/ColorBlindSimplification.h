@@ -137,8 +137,19 @@ struct DXConfig {
   static const uint8_t numFrames;
   static float FOV;
   static int VSync;
-  static int screenTear;
 }; //DXConfig
+
+namespace DXGame {
+  static size_t fps;
+  static double elapsedTime;
+  static std::chrono::high_resolution_clock frameTimer;
+  static std::chrono::steady_clock::time_point startTime;
+  static std::chrono::duration<long long, std::nano> deltaTime;
+  static DirectX::XMMATRIX modelMat;
+  static DirectX::XMMATRIX viewMat;
+  static DirectX::XMMATRIX projMat;
+  static int screenTear;
+}; //DXGame
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
@@ -178,10 +189,6 @@ namespace DXBuffer {
     }; //BufferView
   };
 }; //DXBuffer
-
-namespace DXGame {
-
-}; //DXGame
 
 namespace DXCommon {
 struct DXWindow {
@@ -519,6 +526,7 @@ class DXUniformDataFactory {
     CD3DX12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(ComPtr<ID3D12Device2> device) {
       CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(descHeap->GetCPUDescriptorHandleForHeapStart());
       descSize = device->GetDescriptorHandleIncrementSize(descType);
+      return rtvHandle;
     }; //UpdateDescSize
   }; //DescHeap
 
@@ -724,12 +732,6 @@ static DXSwapChain* dxSwapChain;
 static DXCmdChain* dxCmdChain;
 static DXUniformDataFactory* dxUniform;
 static DXSyncObjectFactory* dxSyncObjects;
-
-static size_t fps;
-static double elapsedTime;
-static std::chrono::high_resolution_clock frameTimer;
-static std::chrono::steady_clock::time_point startTime;
-static std::chrono::duration<long long, std::nano> deltaTime;
 }; //DXCommon
 
 
