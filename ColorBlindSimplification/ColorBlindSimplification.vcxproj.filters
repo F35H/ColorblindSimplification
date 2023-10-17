@@ -27,4 +27,8 @@
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="PixelShader.hlsl" />
+    <FxCompile Include="VerticeShader.hlsl" />
+  </ItemGroup>
 </Project>

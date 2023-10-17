@@ -6,9 +6,28 @@ const LONG DXConfig::windowWidth = 800;
 const uint8_t DXConfig::numFrames = 3;
 //bool DXCommon::warpDrive = false;
 int DXConfig::VSync = 1;
-int DXConfig::screenTear = 0;
-//bool fillscreen = false;
+int DXGame::screenTear = 0;
 const std::array<const float,4> DXConfig::bckgndcolor = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+std::vector<DXBuffer::Vertex> vertices = {
+    { XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, 0.0f) }, 
+    { XMFLOAT3(-1.0f,  1.0f, -1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) }, 
+    { XMFLOAT3(1.0f,  1.0f, -1.0f), XMFLOAT3(1.0f, 1.0f, 0.0f) }, 
+    { XMFLOAT3(1.0f, -1.0f, -1.0f), XMFLOAT3(1.0f, 0.0f, 0.0f) }, 
+    { XMFLOAT3(-1.0f, -1.0f,  1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) }, 
+    { XMFLOAT3(-1.0f,  1.0f,  1.0f), XMFLOAT3(0.0f, 1.0f, 1.0f) }, 
+    { XMFLOAT3(1.0f,  1.0f,  1.0f), XMFLOAT3(1.0f, 1.0f, 1.0f) }, 
+    { XMFLOAT3(1.0f, -1.0f,  1.0f), XMFLOAT3(1.0f, 0.0f, 1.0f) }  
+}; //vertices
+
+std::vector<WORD> indices = {
+    0, 1, 2, 0, 2, 3,
+    4, 6, 5, 4, 7, 6,
+    4, 5, 1, 4, 1, 0,
+    3, 2, 6, 3, 6, 7,
+    1, 5, 6, 1, 6, 2,
+    4, 0, 3, 4, 3, 7
+}; //WordVector
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow) {
   using namespace DXGame;
@@ -29,19 +48,31 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
     "Confirming Math Library");
 
 
-
   ErrorHandler::ErrorHandler();
   dxHardware = new DXHardware();
   dxWindow = new DXWindow(hInstance, L"DX12WindowClass");
-  //Add Tearing Into SwapChain
-  dxUniform = new DXUniformData(dxHardware->device);
   dxCmdChain = new DXCmdChain(dxHardware->device);
-  dxCmdChain->CreateCmdList(D3D12_COMMAND_LIST_TYPE_COPY);
-  dxSwapChain = new DXSwapChain(dxHardware->device, dxUniform, dxWindow, dxCmdChain);
+
+  dxUniform = new DXUniformDataFactory();
+  dxUniform->CreateBuffer(DXBuffer::VerticeBuffer);
+  dxUniform->CreateBuffer(DXBuffer::IndiceBuffer);
+  dxUniform->CreateBuffer(DXBuffer::DepthBuffer);
+
+  dxUniform->verticeBuffers[0].FillBuffer(dxCmdChain->cmdList, dxHardware->device, vertices);
+  dxUniform->indiceBuffers[0].FillBuffer(dxCmdChain->cmdList, dxHardware->device, indices);
+  dxUniform->depthBuffers[0].FillBuffer(dxCmdChain->cmdList, dxHardware->device, DXConfig::windowWidth, DXConfig::windowHeight);
+
+  dxUniform->CreatePipeline(dxHardware->device, L"VerticeShader.hlsl", L"FragShader.hlsl");
+  dxUniform->CreateDescriptors(dxHardware->device);
+
+  dxSwapChain = new DXSwapChain(dxHardware->device, dxWindow, dxUniform, dxCmdChain);
+
   dxSyncObjects = new DXSyncObjectFactory();
+  
   for (; i < DXConfig::numFrames; ++i) {
     dxSyncObjects->CreateSyncObject(DXSyncObjectFactory::Fence, dxHardware->device);
   }; //syncByFrame
+  
   dxSyncObjects->CreateSyncObject(DXSyncObjectFactory::Barrier, dxHardware->device);
   dxSyncObjects->CreateSyncObject(DXSyncObjectFactory::Barrier, dxHardware->device);
   ::ShowWindow(dxWindow->hwnd, SW_SHOW);
@@ -87,6 +118,8 @@ inline void RenderLoop() {
     fps = 0;
     elapsedTime = 0.0;
   }; //if elapsedTime
+
+
 
 
   //Set Matrices
@@ -143,7 +176,7 @@ inline void RenderLoop() {
   mvpMatrix = XMMatrixMultiply(mvpMatrix, projMat);
   dxCmdChain->cmdList->SetGraphicsRoot32BitConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix, 0);
 
-  dxCmdChain->cmdList->DrawIndexedInstanced(_countof(g_Indicies), 1, 0, 0, 0);
+  dxCmdChain->cmdList->DrawIndexedInstanced(indices.size(), 1, 0, 0, 0);
 
 
   //Present Screen 
@@ -164,7 +197,6 @@ inline void RenderLoop() {
   dxSyncObjects->TriggerSemaphore(dxSwapChain->backBufferIndex, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
 
   auto presentFlags = screenTear && !DXConfig::VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
-
   ErrorHandler::ConfirmSuccess(
     dxSwapChain->swapChain->Present(DXConfig::VSync, presentFlags),
     "Presenting Framebuffer to SwapChain");
@@ -187,24 +219,41 @@ inline void ResizeWindow() {
     dxWindow->windowX = std::max(1, crntWidth);
     dxWindow->windowY = std::max(1, crntHeight);
 
+    size_t i = 0;
+    for (; i < DXConfig::numFrames; ++i) {
+      if (i == 0) {
+        dxSyncObjects->TriggerSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
+        dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
+      }; //if i==0
+
+      dxSwapChain->backBuffers[i].Reset();
+    }; //forloop
+
+    DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
+    ErrorHandler::ConfirmSuccess(
+      dxSwapChain->swapChain->GetDesc(&swapChainDesc),
+      "Transfering Descriptor Data");
+
+    ErrorHandler::ConfirmSuccess(
+      dxSwapChain->swapChain->ResizeBuffers(
+        DXConfig::numFrames,
+        dxWindow->windowX,
+        dxWindow->windowY,
+        swapChainDesc.BufferDesc.Format,
+        swapChainDesc.Flags),
+      "Resizing SwapChain Buffer");
+
     dxSwapChain->viewPort = 
       CD3DX12_VIEWPORT(
         0.0f, 0.0f, 
         dxWindow->windowX, 
         dxWindow->windowY);
 
-    size_t i = 0;
-    for (; i < DXConfig::numFrames; ++i) {
-      if (i == 0) {
-        dxSyncObjects->TriggerSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
-        dxSyncObjects->ReturnSemaphore(i, dxCmdChain->cmdQueues[D3D12_COMMAND_LIST_TYPE_DIRECT]);
-      }; //if i==0 
-    }; //forloop
-
-    dxUniform->indiceBuffers[2].FillBuffer(dxCmdChain->cmdList, dxHardware->device, dxWindow->windowX, dxWindow->windowY);
-
-    dxHardware->device->CreateDepthStencilView(dxUniform->indiceBuffers[2].buffer.Get(), dxUniform->indiceBuffers[2].bufferInfo,
+    dxUniform->depthBuffers[0].FillBuffer(dxCmdChain->cmdList, dxHardware->device, dxWindow->windowX, dxWindow->windowY);
+    dxHardware->device->CreateDepthStencilView(dxUniform->depthBuffers[0].buffer.Get(), dxUniform->depthBuffers[0].bufferInfo,
       dxUniform->descHeaps[D3D12_DESCRIPTOR_HEAP_TYPE_DSV].descHeap->GetCPUDescriptorHandleForHeapStart());
+
+
   }; //if width/height
 
 }; //ResizeWindow

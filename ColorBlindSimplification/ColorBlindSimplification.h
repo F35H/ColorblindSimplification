@@ -164,7 +164,8 @@ namespace DXBuffer {
 
   enum BufferType {
     VerticeBuffer = 0,
-    IndiceBuffer
+    IndiceBuffer,
+    DepthBuffer
   }; //BufferType
 
   struct BufferView : D3D12_VERTEX_BUFFER_VIEW, D3D12_INDEX_BUFFER_VIEW, D3D12_DEPTH_STENCIL_VIEW_DESC {
@@ -172,6 +173,16 @@ namespace DXBuffer {
     UINT*                      SizeInBytes;
     UINT*                      StrideInBytes;
     DXGI_FORMAT*               Format;
+    D3D12_DSV_DIMENSION*       ViewDimension;
+    D3D12_DSV_FLAGS*           Flags;
+    union {
+      D3D12_TEX1D_DSV*         Texture1D;
+      D3D12_TEX1D_ARRAY_DSV* Texture1DArray;
+      D3D12_TEX2D_DSV* Texture2D;
+      D3D12_TEX2D_ARRAY_DSV* Texture2DArray;
+      D3D12_TEX2DMS_DSV* Texture2DMS;
+      D3D12_TEX2DMS_ARRAY_DSV* Texture2DMSArray;
+    };
 
     BufferView(BufferType type) {
       switch (type) {
@@ -184,6 +195,12 @@ namespace DXBuffer {
         this->BufferView::BufferLocation = &this->D3D12_INDEX_BUFFER_VIEW::BufferLocation;
         this->BufferView::SizeInBytes = &this->D3D12_INDEX_BUFFER_VIEW::SizeInBytes;
         this->BufferView::Format = &this->D3D12_INDEX_BUFFER_VIEW::Format;
+        return;
+      case DepthBuffer:
+        this->BufferView::ViewDimension = &this->D3D12_DEPTH_STENCIL_VIEW_DESC::ViewDimension;
+        this->BufferView::Flags = &this->D3D12_DEPTH_STENCIL_VIEW_DESC::Flags;
+        this->BufferView::Format = &this->D3D12_DEPTH_STENCIL_VIEW_DESC::Format;
+        this->BufferView::Texture2D = &this->D3D12_DEPTH_STENCIL_VIEW_DESC::Texture2D;
         return;
       }; //switch
     }; //BufferView
@@ -326,7 +343,7 @@ struct DXHardware {
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     //Checking for Tearing Support
-    DXConfig::screenTear = false;
+    DXGame::screenTear = false;
 
     ErrorHandler::ConfirmSuccess(
       CreateDXGIFactory1(
@@ -339,8 +356,8 @@ struct DXHardware {
 
     if (!factoryFive->CheckFeatureSupport(
       DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-      &DXConfig::screenTear,
-      sizeof(DXConfig::screenTear))) { DXConfig::screenTear = true; }
+      &DXGame::screenTear,
+      sizeof(DXGame::screenTear))) { DXGame::screenTear = true; }
   } //DXHardware Ctor
 }; //HardWare
 class DXUniformDataFactory {
@@ -354,7 +371,49 @@ class DXUniformDataFactory {
       bufferInfo = new DXBuffer::BufferView(type);
     }; //Buffer
 
-    void FillBuffer(ComPtr<ID3D12GraphicsCommandList2> cmdList, ComPtr<ID3D12Device2> device, std::vector<void*> vertices) {
+    void FillBuffer(ComPtr<ID3D12GraphicsCommandList2> cmdList, ComPtr<ID3D12Device2> device, std::vector<DXBuffer::Vertex> vertices) {
+      void* buffData = vertices.data();
+      UINT buffCount = vertices.size();
+      UINT buffSize = sizeof(buffData);
+      ComPtr<ID3D12Resource> stageBuffer;
+
+      ErrorHandler::ConfirmSuccess(
+        device->CreateCommittedResource(
+          &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+          D3D12_HEAP_FLAG_NONE,
+          &CD3DX12_RESOURCE_DESC::Buffer(buffSize, D3D12_RESOURCE_FLAGS()),
+          D3D12_RESOURCE_STATE_COPY_DEST,
+          nullptr,
+          IID_PPV_ARGS(&buffer)),
+        "Allocating Vertex Buffer");
+
+      ErrorHandler::ConfirmSuccess(
+        device->CreateCommittedResource(
+          &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+          D3D12_HEAP_FLAG_NONE,
+          &CD3DX12_RESOURCE_DESC::Buffer(buffSize),
+          D3D12_RESOURCE_STATE_GENERIC_READ,
+          nullptr,
+          IID_PPV_ARGS(&stageBuffer)),
+        "Allocating Stage Buffer");
+
+      D3D12_SUBRESOURCE_DATA subData = {};
+      subData.pData = buffData;
+      subData.RowPitch = buffSize;
+      subData.SlicePitch = subData.RowPitch;
+
+      UpdateSubresources(cmdList.Get(),
+        buffer.Get(), stageBuffer.Get(),
+        0, 0, 1, &subData);
+
+      *bufferInfo->BufferLocation = buffer->GetGPUVirtualAddress();
+      *bufferInfo->SizeInBytes = buffSize;
+      *bufferInfo->StrideInBytes = sizeof(DXBuffer::Vertex);;
+      *bufferInfo->Format = DXGI_FORMAT_R16_UINT;
+    }; //FillBuffer
+
+
+    void FillBuffer(ComPtr<ID3D12GraphicsCommandList2> cmdList, ComPtr<ID3D12Device2> device, std::vector<WORD> vertices) {
       void* buffData = vertices.data();
       UINT buffCount = vertices.size();
       UINT buffSize = sizeof(buffData);
@@ -413,7 +472,7 @@ class DXUniformDataFactory {
       
       *bufferInfo->Format = DXGI_FORMAT_D32_FLOAT;
       *bufferInfo->ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-      *bufferInfo->Texture2D.MipSlice = 0; 
+      bufferInfo->Texture2D->MipSlice = 0;
       *bufferInfo->Flags = D3D12_DSV_FLAG_NONE;
     }; //FillBuffer
   }; //Buffer
@@ -534,6 +593,7 @@ class DXUniformDataFactory {
   std::vector<Pipeline> pipelineVector;
   std::vector<Buffer>   indiceBuffers;
   std::vector<Buffer>   verticeBuffers;
+  std::vector<Buffer>   depthBuffers;
   std::vector<DescHeap> descHeaps;
 
   DXUniformDataFactory() = default;
@@ -605,6 +665,8 @@ struct DXCmdChain {
       }; //if i < 1
     }; //cmdAllocs
   }; //DXCmdChain Ctor
+
+
 }; //DXCmdChain
 struct DXSwapChain {
   ComPtr<IDXGISwapChain4> swapChain;
@@ -635,7 +697,7 @@ struct DXSwapChain {
     swapChainParams.Scaling = DXGI_SCALING_STRETCH;
     swapChainParams.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainParams.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-    swapChainParams.Flags = DXConfig::screenTear ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+    swapChainParams.Flags = DXGame::screenTear ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
 
     ComPtr<IDXGISwapChain1> swapChain1;
     dxgiFactory4->CreateSwapChainForHwnd(
